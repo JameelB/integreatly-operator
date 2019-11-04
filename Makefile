@@ -218,4 +218,4 @@ push/csv:
 	-operator-courier push deploy/olm-catalog/integreatly-operator/ $(REPO) integreatly $(TAG) "$(AUTH_TOKEN)"
 
 .PHONY: gen/push/csv
-gen/push/csv: gen/csv push/csv
+gen/push/csv: gen/csv push/csvs
