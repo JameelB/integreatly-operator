@@ -20,15 +20,18 @@ import (
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
-func NewBootstrapReconciler(configManager config.ConfigReadWriter, installation *integreatlyv1alpha1.Installation, mpm marketplace.MarketplaceInterface) (*Reconciler, error) {
+func NewBootstrapReconciler(configManager config.ConfigReadWriter, installation *integreatlyv1alpha1.Installation, mpm marketplace.MarketplaceInterface, mgr manager.Manager) (*Reconciler, error) {
 	return &Reconciler{
 		ConfigManager: configManager,
 		mpm:           mpm,
 		installation:  installation,
 		Reconciler:    resources.NewReconciler(mpm),
+		recorder:      mgr.GetEventRecorderFor(string(integreatlyv1alpha1.BootstrapStage)),
 	}, nil
 }
 
@@ -38,6 +41,7 @@ type Reconciler struct {
 	mpm           marketplace.MarketplaceInterface
 	installation  *integreatlyv1alpha1.Installation
 	*resources.Reconciler
+	recorder record.EventRecorder
 }
 
 func (r *Reconciler) GetPreflightObject(ns string) runtime.Object {
@@ -49,12 +53,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 
 	phase, err := r.reconcileOauthSecrets(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile oauth secrets: %s", err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.retrieveConsoleUrlAndSubdomain(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to retrieve console url and subdomain: %s", err.Error()))
+		}
 		return phase, err
+	}
+
+	statusStage := installation.Status.Stages[integreatlyv1alpha1.BootstrapStage]
+	if statusStage == nil || statusStage.Phase != integreatlyv1alpha1.PhaseCompleted {
+		r.recorder.Event(installation, "Normal", integreatlyv1alpha1.EventInstallationCompleted, "Bootstrap stage reconciled successfully")
 	}
 
 	logrus.Infof("Bootstrap stage reconciled successfully")

@@ -18,7 +18,9 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 const (
@@ -33,9 +35,10 @@ type Reconciler struct {
 	mpm           marketplace.MarketplaceInterface
 	logger        *logrus.Entry
 	*resources.Reconciler
+	recorder record.EventRecorder
 }
 
-func NewReconciler(configManager config.ConfigReadWriter, installation *integreatlyv1alpha1.Installation, mpm marketplace.MarketplaceInterface) (*Reconciler, error) {
+func NewReconciler(configManager config.ConfigReadWriter, installation *integreatlyv1alpha1.Installation, mpm marketplace.MarketplaceInterface, mgr manager.Manager) (*Reconciler, error) {
 	config, err := configManager.ReadCloudResources()
 	if err != nil {
 		return nil, fmt.Errorf("could not read cloud resources config: %w", err)
@@ -52,6 +55,7 @@ func NewReconciler(configManager config.ConfigReadWriter, installation *integrea
 		mpm:           mpm,
 		logger:        logger,
 		Reconciler:    resources.NewReconciler(mpm),
+		recorder:      mgr.GetEventRecorderFor(string(config.GetProductName())),
 	}, nil
 }
 
@@ -64,7 +68,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 
 	phase, err := r.ReconcileFinalizer(ctx, client, installation, string(r.Config.GetProductName()), func() (integreatlyv1alpha1.StatusPhase, error) {
 		// ensure resources are cleaned up before deleting the namespace
-		phase, err := r.cleanupResources(ctx, installation, client)
+		phase, err := r.doCloudResourcesExist(ctx, installation, client)
 		if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
 			return phase, err
 		}
@@ -77,21 +81,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 		return integreatlyv1alpha1.PhaseCompleted, nil
 	})
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile finalizer: %s", err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.ReconcileNamespace(ctx, ns, installation, client)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile %s namespace: %s", ns, err.Error()))
+		}
 		return phase, err
 	}
 
 	namespace, err := resources.GetNS(ctx, ns, client)
 	if err != nil {
+		r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to retrieve %s namespace: %s", ns, err.Error()))
 		return integreatlyv1alpha1.PhaseFailed, err
 	}
 
 	phase, err = r.ReconcileSubscription(ctx, namespace, marketplace.Target{Pkg: defaultSubscriptionName, Channel: marketplace.IntegreatlyChannel, Namespace: r.Config.GetNamespace(), ManifestPackage: manifestPackage}, installation.Namespace, client)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile %s subscription: %s", defaultSubscriptionName, err.Error()))
+		}
 		return phase, err
 	}
 
@@ -104,11 +118,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 	product.Version = r.Config.GetProductVersion()
 	product.OperatorVersion = r.Config.GetOperatorVersion()
 
+	croStatus := installation.Status.Stages[integreatlyv1alpha1.CloudResourcesStage].Products[r.Config.GetProductName()]
+	if croStatus == nil || croStatus.Status != integreatlyv1alpha1.PhaseCompleted {
+		r.recorder.Event(installation, "Normal", integreatlyv1alpha1.EventInstallationCompleted, fmt.Sprintf("%s has reconciled successfully", r.Config.GetProductName()))
+	}
+
 	r.logger.Infof("%s has reconciled successfully", r.Config.GetProductName())
 	return integreatlyv1alpha1.PhaseCompleted, nil
 }
 
-func (r *Reconciler) cleanupResources(ctx context.Context, installation *integreatlyv1alpha1.Installation, client k8sclient.Client) (integreatlyv1alpha1.StatusPhase, error) {
+// This only ensure that cloud resources no longer exists before proceeding to remove the cloud resource namespace.
+// The deletion of the resources below are handled by the cro operator
+func (r *Reconciler) doCloudResourcesExist(ctx context.Context, installation *integreatlyv1alpha1.Installation, client k8sclient.Client) (integreatlyv1alpha1.StatusPhase, error) {
 	r.logger.Info("ensuring cloud resources are cleaned up")
 
 	// ensure postgres instances are cleaned up
@@ -118,7 +139,7 @@ func (r *Reconciler) cleanupResources(ctx context.Context, installation *integre
 	}
 	err := client.List(ctx, postgresInstances, postgresInstanceOpts...)
 	if err != nil {
-		return integreatlyv1alpha1.PhaseFailed, err
+		return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to list postgres instances: %w", err)
 	}
 	if len(postgresInstances.Items) > 0 {
 		r.logger.Info("deletion of postgres instances in progress")
@@ -132,7 +153,7 @@ func (r *Reconciler) cleanupResources(ctx context.Context, installation *integre
 	}
 	err = client.List(ctx, redisInstances, redisInstanceOpts...)
 	if err != nil {
-		return integreatlyv1alpha1.PhaseFailed, err
+		return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to list redis instances: %w", err)
 	}
 	if len(redisInstances.Items) > 0 {
 		r.logger.Info("deletion of redis instances in progress")
@@ -146,7 +167,7 @@ func (r *Reconciler) cleanupResources(ctx context.Context, installation *integre
 	}
 	err = client.List(ctx, blobStorages, blobStorageOpts...)
 	if err != nil {
-		return integreatlyv1alpha1.PhaseFailed, err
+		return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to list blobStorage instances: %w", err)
 	}
 	if len(blobStorages.Items) > 0 {
 		r.logger.Info("deletion of blob storage instances in progress")
@@ -160,7 +181,7 @@ func (r *Reconciler) cleanupResources(ctx context.Context, installation *integre
 	}
 	err = client.List(ctx, smtpCredentialSets, smtpOpts...)
 	if err != nil {
-		return integreatlyv1alpha1.PhaseFailed, err
+		return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to list smtpCredentialSets instances: %w", err)
 	}
 	if len(smtpCredentialSets.Items) > 0 {
 		r.logger.Info("deletion of smtp credential sets in progress")

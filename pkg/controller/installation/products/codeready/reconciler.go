@@ -27,8 +27,10 @@ import (
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 const (
@@ -48,9 +50,10 @@ type Reconciler struct {
 	mpm           marketplace.MarketplaceInterface
 	logger        *logrus.Entry
 	*resources.Reconciler
+	recorder record.EventRecorder
 }
 
-func NewReconciler(configManager config.ConfigReadWriter, installation *integreatlyv1alpha1.Installation, mpm marketplace.MarketplaceInterface) (*Reconciler, error) {
+func NewReconciler(configManager config.ConfigReadWriter, installation *integreatlyv1alpha1.Installation, mpm marketplace.MarketplaceInterface, mgr manager.Manager) (*Reconciler, error) {
 	config, err := configManager.ReadCodeReady()
 	if err != nil {
 		return nil, fmt.Errorf("could not retrieve che config: %w", err)
@@ -68,6 +71,7 @@ func NewReconciler(configManager config.ConfigReadWriter, installation *integrea
 		mpm:           mpm,
 		logger:        logger,
 		Reconciler:    resources.NewReconciler(mpm),
+		recorder:      mgr.GetEventRecorderFor(string(config.GetProductName())),
 	}, nil
 }
 
@@ -90,46 +94,71 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 		return integreatlyv1alpha1.PhaseCompleted, nil
 	})
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile finalizer: %s", err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.ReconcileNamespace(ctx, r.Config.GetNamespace(), r.installation, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile %s namespace: %s", r.Config.GetNamespace(), err.Error()))
+		}
 		return phase, err
 	}
 
 	namespace, err := resources.GetNS(ctx, r.Config.GetNamespace(), serverClient)
 	if err != nil {
+		r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to retrieve %s namespace: %s", r.Config.GetNamespace(), err.Error()))
 		return integreatlyv1alpha1.PhaseFailed, err
 	}
 
 	phase, err = r.ReconcileSubscription(ctx, namespace, marketplace.Target{Pkg: defaultSubscriptionName, Channel: marketplace.IntegreatlyChannel, Namespace: r.Config.GetNamespace(), ManifestPackage: manifestPackage}, r.Config.GetNamespace(), serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile %s subscription: %s", defaultSubscriptionName, err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.reconcileExternalDatasources(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile external data sources: %s", err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.reconcileCheCluster(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile che cluster: %s", err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.reconcileKeycloakClient(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile keycloak client: %s", err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.reconcileBlackboxTargets(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile blackbox targets: %s", err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.reconcileBackups(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile backups: %s", err.Error()))
+		}
 		return phase, err
 	}
 
@@ -137,12 +166,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 	logrus.Infof("Phase: %s reconcileTemplates", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
 		logrus.Infof("Error: %s", err)
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile templates: %s", err.Error()))
+		}
 		return phase, err
 	}
 
 	product.Host = r.Config.GetHost()
 	product.Version = r.Config.GetProductVersion()
 	product.OperatorVersion = r.Config.GetOperatorVersion()
+
+	productStatus := installation.Status.Stages[integreatlyv1alpha1.ProductsStage].Products[r.Config.GetProductName()]
+	if productStatus == nil || productStatus.Status != integreatlyv1alpha1.PhaseCompleted {
+		r.recorder.Event(installation, "Normal", integreatlyv1alpha1.EventInstallationCompleted, fmt.Sprintf("%s has reconciled successfully", r.Config.GetProductName()))
+	}
 
 	r.logger.Infof("%s has reconciled successfully", r.Config.GetProductName())
 	return integreatlyv1alpha1.PhaseCompleted, nil

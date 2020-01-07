@@ -56,6 +56,7 @@ func newReconciler(mgr manager.Manager, products []string) reconcile.Reconciler 
 		productsToInstall: products,
 		context:           ctx,
 		cancel:            cancel,
+		mgr:               mgr,
 	}
 }
 
@@ -147,6 +148,7 @@ type ReconcileInstallation struct {
 	productsToInstall []string
 	context           context.Context
 	cancel            context.CancelFunc
+	mgr               manager.Manager
 }
 
 // Reconcile reads that state of the cluster for a Installation object and makes changes based on the state read
@@ -206,7 +208,7 @@ func (r *ReconcileInstallation) Reconcile(request reconcile.Request) (reconcile.
 			}
 			productName := strings.Split(productFinalizer, ".")[1]
 			product := installation.GetProductStatusObject(integreatlyv1alpha1.ProductName(productName))
-			reconciler, err := products.NewReconciler(product.Name, r.restConfig, configManager, installation)
+			reconciler, err := products.NewReconciler(product.Name, r.restConfig, configManager, installation, r.mgr)
 			if err != nil {
 				merr.Add(fmt.Errorf("Failed to build reconciler for product %s: %w", product.Name, err))
 			}
@@ -365,7 +367,7 @@ func (r *ReconcileInstallation) checkNamespaceForProducts(ns corev1.Namespace, i
 	serverClient, _ := k8sclient.New(r.restConfig, k8sclient.Options{})
 	for _, stage := range installationType.Stages {
 		for _, product := range stage.Products {
-			reconciler, err := products.NewReconciler(product.Name, r.restConfig, configManager, installation)
+			reconciler, err := products.NewReconciler(product.Name, r.restConfig, configManager, installation, r.mgr)
 			if err != nil {
 				return foundProducts, err
 			}
@@ -387,7 +389,7 @@ func (r *ReconcileInstallation) checkNamespaceForProducts(ns corev1.Namespace, i
 func (r *ReconcileInstallation) bootstrapStage(installation *integreatlyv1alpha1.Installation, configManager config.ConfigReadWriter) (integreatlyv1alpha1.StatusPhase, error) {
 	mpm := marketplace.NewManager()
 
-	reconciler, err := NewBootstrapReconciler(configManager, installation, mpm)
+	reconciler, err := NewBootstrapReconciler(configManager, installation, mpm, r.mgr)
 	if err != nil {
 		return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to build a reconciler for Bootstrap: %w", err)
 	}
@@ -407,7 +409,7 @@ func (r *ReconcileInstallation) processStage(installation *integreatlyv1alpha1.I
 	incompleteStage := false
 	var mErr error
 	for _, product := range stage.Products {
-		reconciler, err := products.NewReconciler(product.Name, r.restConfig, configManager, installation)
+		reconciler, err := products.NewReconciler(product.Name, r.restConfig, configManager, installation, r.mgr)
 		if err != nil {
 			return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to build a reconciler for %s: %w", product.Name, err)
 		}

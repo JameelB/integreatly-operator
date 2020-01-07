@@ -19,8 +19,10 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 const (
@@ -44,13 +46,14 @@ type Reconciler struct {
 	installation  *integreatlyv1alpha1.Installation
 	monitoring    *monitoring_v1alpha1.ApplicationMonitoring
 	*resources.Reconciler
+	recorder record.EventRecorder
 }
 
 func (r *Reconciler) GetPreflightObject(ns string) runtime.Object {
 	return nil
 }
 
-func NewReconciler(configManager config.ConfigReadWriter, installation *integreatlyv1alpha1.Installation, mpm marketplace.MarketplaceInterface) (*Reconciler, error) {
+func NewReconciler(configManager config.ConfigReadWriter, installation *integreatlyv1alpha1.Installation, mpm marketplace.MarketplaceInterface, mgr manager.Manager) (*Reconciler, error) {
 	logger := logrus.NewEntry(logrus.StandardLogger())
 	monitoringConfig, err := configManager.ReadMonitoring()
 
@@ -69,6 +72,7 @@ func NewReconciler(configManager config.ConfigReadWriter, installation *integrea
 		installation:  installation,
 		mpm:           mpm,
 		Reconciler:    resources.NewReconciler(mpm),
+		recorder:      mgr.GetEventRecorderFor(string(monitoringConfig.GetProductName())),
 	}, nil
 }
 
@@ -83,7 +87,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 		err := serverClient.List(ctx, blackboxtargets, blackboxtargetsListOpts...)
 		if err != nil {
 			logrus.Infof("Phase: Monitoring ReconcileFinalizer blackboxtargets error")
-			return integreatlyv1alpha1.PhaseFailed, err
+			return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to list blackbox targets: %w", err)
 		}
 		if len(blackboxtargets.Items) > 0 {
 			logrus.Infof("Phase: Monitoring ReconcileFinalizer blackboxtargets list > 0")
@@ -96,12 +100,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 					continue
 				}
 				if err != nil {
-					return integreatlyv1alpha1.PhaseFailed, err
+					return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("Failed to get %s blackbox target: %w", bbt.Name, err)
 				}
 
 				err = serverClient.Delete(ctx, b)
 				if err != nil && !kerrors.IsNotFound(err) {
-					return integreatlyv1alpha1.PhaseFailed, err
+					return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to delete %s blackbox target: %w", b.Name, err)
 				}
 			}
 			return integreatlyv1alpha1.PhaseInProgress, nil
@@ -111,14 +115,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 		err = serverClient.Get(ctx, k8sclient.ObjectKey{Name: defaultMonitoringName, Namespace: r.Config.GetNamespace()}, m)
 		if err != nil && !kerrors.IsNotFound(err) {
 			logrus.Infof("Phase: Monitoring ReconcileFinalizer error fetch ApplicationMonitoring CR")
-			return integreatlyv1alpha1.PhaseFailed, err
+			return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to get %s application monitoring custom resource: %w", defaultMonitoringName, err)
 		}
 		if !kerrors.IsNotFound(err) {
 			if m.DeletionTimestamp == nil {
 				logrus.Infof("Phase: Monitoring ReconcileFinalizer delete ApplicationMonitoring CR")
 				err = serverClient.Delete(ctx, m)
 				if err != nil && !kerrors.IsNotFound(err) {
-					return integreatlyv1alpha1.PhaseFailed, err
+					return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("failed to delete %s application monitoring custom resource: %w", defaultMonitoringName, err)
 				}
 			}
 			return integreatlyv1alpha1.PhaseInProgress, nil
@@ -132,6 +136,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 		return integreatlyv1alpha1.PhaseCompleted, nil
 	})
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile finalizer: %s", err.Error()))
+		}
 		return phase, err
 	}
 
@@ -140,23 +147,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 	phase, err = r.ReconcileNamespace(ctx, ns, installation, serverClient)
 	logrus.Infof("Phase: %s ReconcileNamespace", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile %s namespace: %s", ns, err.Error()))
+		}
 		return phase, err
 	}
 
 	namespace, err := resources.GetNS(ctx, ns, serverClient)
 	if err != nil {
+		r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to retrieve %s namespace: %s", ns, err.Error()))
 		return integreatlyv1alpha1.PhaseFailed, err
 	}
 
 	phase, err = r.ReconcileSubscription(ctx, namespace, marketplace.Target{Pkg: defaultSubscriptionName, Channel: marketplace.IntegreatlyChannel, Namespace: ns, ManifestPackage: manifestPackagae}, ns, serverClient)
 	logrus.Infof("Phase: %s ReconcileSubscription", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile %s subscription: %s", defaultSubscriptionName, err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.reconcileComponents(ctx, serverClient)
 	logrus.Infof("Phase: %s reconcileComponents", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile components: %s", err.Error()))
+		}
 		return phase, err
 	}
 
@@ -164,13 +181,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 	logrus.Infof("Phase: %s populateParams", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
 		logrus.Infof("Error: %s", err)
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to populate parameters: %s", defaultSubscriptionName, err.Error()))
+		}
 		return phase, err
 	}
 
 	phase, err = r.reconcileTemplates(ctx, serverClient)
-	logrus.Infof("Phase: %s reconcileComponents", phase)
+	logrus.Infof("Phase: %s reconcileTemplates", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
 		logrus.Infof("Error: %s", err)
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile templates: %s", err.Error()))
+		}
 		return phase, err
 	}
 
@@ -178,6 +201,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 	logrus.Infof("Phase: %s reconcileScrapeConfigs", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
 		logrus.Infof("Error: %s", err)
+		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile scrape configs: %s", err.Error()))
+		}
 		return phase, err
 	}
 
@@ -187,7 +213,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 
 	err = r.ConfigManager.WriteConfig(r.Config)
 	if err != nil {
+		r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to update monitoring config: %s", err.Error()))
 		return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("could not update monitoring config: %w", err)
+	}
+
+	monitoringStatus := installation.Status.Stages[integreatlyv1alpha1.MonitoringStage].Products[r.Config.GetProductName()]
+	if monitoringStatus == nil || monitoringStatus.Status != integreatlyv1alpha1.PhaseCompleted {
+		r.recorder.Event(installation, "Normal", integreatlyv1alpha1.EventInstallationCompleted, fmt.Sprintf("%s has reconciled successfully", r.Config.GetProductName()))
 	}
 
 	logrus.Infof("%s installation is reconciled successfully", packageName)
