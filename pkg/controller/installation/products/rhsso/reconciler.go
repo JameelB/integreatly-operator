@@ -117,51 +117,51 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 		return integreatlyv1alpha1.PhaseCompleted, nil
 	})
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile finalizer: %s", err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, "Failed to reconcile finalizer", err)
 		return phase, err
 	}
 
 	phase, err = r.ReconcileNamespace(ctx, ns, installation, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile %s namespace: %s", ns, err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile %s namespace", ns), err)
 		return phase, err
 	}
 
 	namespace, err := resources.GetNS(ctx, ns, serverClient)
 	if err != nil {
-		resources.EmitEventProcessingError(r.recorder, installation, integreatlyv1alpha1.PhaseFailed, fmt.Sprintf("Failed to retrieve %s namespace: %s", ns, err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, integreatlyv1alpha1.PhaseFailed, fmt.Sprintf("Failed to retrieve %s namespace", ns), err)
 		return integreatlyv1alpha1.PhaseFailed, err
 	}
 
 	phase, err = r.ReconcileSubscription(ctx, namespace, marketplace.Target{Pkg: defaultSubscriptionName, Channel: marketplace.IntegreatlyChannel, Namespace: r.Config.GetNamespace(), ManifestPackage: manifestPackage}, r.Config.GetNamespace(), serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile %s subscription: %s", defaultSubscriptionName, err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile %s subscription", defaultSubscriptionName), err)
 		return phase, err
 	}
 
 	phase, err = r.reconcileComponents(ctx, installation, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile components: %s", err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, "Failed to reconcile components", err)
 		return phase, err
 	}
 
 	phase, err = r.handleProgressPhase(ctx, installation, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to handle in progress phase: %s", err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, "Failed to handle in progress phase", err)
 		return phase, err
 	}
 
 	phase, err = r.reconcileTemplates(ctx, installation, serverClient)
 	logrus.Infof("Phase: %s reconcileTemplates", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile templates: %s", err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, "Failed to reconcile templates", err)
 		logrus.Infof("Error: %s", err.Error())
 		return phase, err
 	}
 
 	phase, err = r.reconcileBlackboxTargets(ctx, installation, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile blackbox targets: %s", err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, "Failed to reconcile blackbox targets", err)
 		return phase, err
 	}
 

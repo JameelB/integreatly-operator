@@ -53,13 +53,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 
 	phase, err := r.reconcileOauthSecrets(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile oauth secrets: %s", err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, "Failed to reconcile oauth secrets", err)
 		return phase, err
 	}
 
 	phase, err = r.retrieveConsoleUrlAndSubdomain(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to retrieve console url and subdomain: %s", err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, phase, "Failed to retrieve console url and subdomain", err)
 		return phase, err
 	}
 

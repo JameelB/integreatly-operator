@@ -25,8 +25,8 @@ func EmitEventProductCompleted(recorder record.EventRecorder, installation *inte
 }
 
 // Emits a warning event when a processing error occurs during reconcile. It is only emitted on phase failed
-func EmitEventProcessingError(recorder record.EventRecorder, installation *integreatlyv1alpha1.Installation, phase integreatlyv1alpha1.StatusPhase, errorMessage string) {
-	if phase == integreatlyv1alpha1.PhaseFailed {
-		recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, errorMessage)
+func EmitEventProcessingError(recorder record.EventRecorder, installation *integreatlyv1alpha1.Installation, phase integreatlyv1alpha1.StatusPhase, errorMessage string, err error) {
+	if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
+		recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("%s:\n%s", errorMessage, err.Error()))
 	}
 }
