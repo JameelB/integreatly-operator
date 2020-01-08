@@ -18,8 +18,8 @@ func EmitEventStageCompleted(recorder record.EventRecorder, installation *integr
 
 // Emits a normal event upon successful completion of product installation
 func EmitEventProductCompleted(recorder record.EventRecorder, installation *integreatlyv1alpha1.Installation, stageName integreatlyv1alpha1.StageName, productName integreatlyv1alpha1.ProductName) {
-	productStatus := installation.Status.Stages[stageName].Products[productName]
-	if productStatus == nil || productStatus.Status != integreatlyv1alpha1.PhaseCompleted {
+	stage := installation.Status.Stages[stageName]
+	if stage == nil || stage.Products[productName] == nil || stage.Products[productName].Status != integreatlyv1alpha1.PhaseCompleted {
 		recorder.Event(installation, "Normal", integreatlyv1alpha1.EventInstallationCompleted, fmt.Sprintf("%s was installed successfully", productName))
 	}
 }
