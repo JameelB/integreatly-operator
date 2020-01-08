@@ -53,24 +53,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 
 	phase, err := r.reconcileOauthSecrets(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile oauth secrets: %s", err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile oauth secrets: %s", err.Error()))
 		return phase, err
 	}
 
 	phase, err = r.retrieveConsoleUrlAndSubdomain(ctx, serverClient)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to retrieve console url and subdomain: %s", err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to retrieve console url and subdomain: %s", err.Error()))
 		return phase, err
 	}
 
-	statusStage := installation.Status.Stages[integreatlyv1alpha1.BootstrapStage]
-	if statusStage == nil || statusStage.Phase != integreatlyv1alpha1.PhaseCompleted {
-		r.recorder.Event(installation, "Normal", integreatlyv1alpha1.EventInstallationCompleted, "Bootstrap stage reconciled successfully")
-	}
+	resources.EmitEventStageCompleted(r.recorder, installation, integreatlyv1alpha1.BootstrapStage)
 
 	logrus.Infof("Bootstrap stage reconciled successfully")
 	return integreatlyv1alpha1.PhaseCompleted, nil

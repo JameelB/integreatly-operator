@@ -136,9 +136,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 		return integreatlyv1alpha1.PhaseCompleted, nil
 	})
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile finalizer: %s", err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile finalizer: %s", err.Error()))
 		return phase, err
 	}
 
@@ -147,63 +145,51 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 	phase, err = r.ReconcileNamespace(ctx, ns, installation, serverClient)
 	logrus.Infof("Phase: %s ReconcileNamespace", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile %s namespace: %s", ns, err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile %s namespace: %s", ns, err.Error()))
 		return phase, err
 	}
 
 	namespace, err := resources.GetNS(ctx, ns, serverClient)
 	if err != nil {
-		r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to retrieve %s namespace: %s", ns, err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, integreatlyv1alpha1.PhaseFailed, fmt.Sprintf("Failed to retrieve %s namespace: %s", ns, err.Error()))
 		return integreatlyv1alpha1.PhaseFailed, err
 	}
 
 	phase, err = r.ReconcileSubscription(ctx, namespace, marketplace.Target{Pkg: defaultSubscriptionName, Channel: marketplace.IntegreatlyChannel, Namespace: ns, ManifestPackage: manifestPackagae}, ns, serverClient)
 	logrus.Infof("Phase: %s ReconcileSubscription", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile %s subscription: %s", defaultSubscriptionName, err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile %s subscription: %s", defaultSubscriptionName, err.Error()))
 		return phase, err
 	}
 
 	phase, err = r.reconcileComponents(ctx, serverClient)
 	logrus.Infof("Phase: %s reconcileComponents", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile components: %s", err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile components: %s", err.Error()))
 		return phase, err
 	}
 
 	phase, err = r.populateParams(ctx, serverClient)
 	logrus.Infof("Phase: %s populateParams", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		logrus.Infof("Error: %s", err)
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to populate parameters: %s", defaultSubscriptionName, err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to populate parameters: %s", err.Error()))
+		logrus.Infof("Error: %s", err.Error())
 		return phase, err
 	}
 
 	phase, err = r.reconcileTemplates(ctx, serverClient)
 	logrus.Infof("Phase: %s reconcileTemplates", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		logrus.Infof("Error: %s", err)
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile templates: %s", err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile templates: %s", err.Error()))
+		logrus.Infof("Error: %s", err.Error())
 		return phase, err
 	}
 
 	phase, err = r.reconcileScrapeConfigs(ctx, serverClient)
 	logrus.Infof("Phase: %s reconcileScrapeConfigs", phase)
 	if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
-		logrus.Infof("Error: %s", err)
-		if err != nil && phase == integreatlyv1alpha1.PhaseFailed {
-			r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to reconcile scrape configs: %s", err.Error()))
-		}
+		resources.EmitEventProcessingError(r.recorder, installation, phase, fmt.Sprintf("Failed to reconcile scrape configs: %s", err.Error()))
+		logrus.Infof("Error: %s", err.Error())
 		return phase, err
 	}
 
@@ -213,15 +199,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 
 	err = r.ConfigManager.WriteConfig(r.Config)
 	if err != nil {
-		r.recorder.Event(installation, "Warning", integreatlyv1alpha1.EventProcessingError, fmt.Sprintf("Failed to update monitoring config: %s", err.Error()))
+		resources.EmitEventProcessingError(r.recorder, installation, integreatlyv1alpha1.PhaseFailed, fmt.Sprintf("Failed to update monitoring config: %s", err.Error()))
 		return integreatlyv1alpha1.PhaseFailed, fmt.Errorf("could not update monitoring config: %w", err)
 	}
 
-	monitoringStatus := installation.Status.Stages[integreatlyv1alpha1.MonitoringStage].Products[r.Config.GetProductName()]
-	if monitoringStatus == nil || monitoringStatus.Status != integreatlyv1alpha1.PhaseCompleted {
-		r.recorder.Event(installation, "Normal", integreatlyv1alpha1.EventInstallationCompleted, fmt.Sprintf("%s has reconciled successfully", r.Config.GetProductName()))
-	}
-
+	resources.EmitEventProductCompleted(r.recorder, installation, integreatlyv1alpha1.MonitoringStage, r.Config.GetProductName())
 	logrus.Infof("%s installation is reconciled successfully", packageName)
 	return integreatlyv1alpha1.PhaseCompleted, nil
 }
