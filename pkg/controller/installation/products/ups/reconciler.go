@@ -151,6 +151,7 @@ func (r *Reconciler) reconcileComponents(ctx context.Context, installation *inte
 	logrus.Info("Reconciling external postgres")
 	ns := installation.Namespace
 
+	fmt.Println("JB-TEST: UPS: RECONCILING EXTERNAL DATASTORE")
 	// setup postgres custom resource
 	// this will be used by the cloud resources operator to provision a postgres instance
 	postgresName := fmt.Sprintf("ups-postgres-%s", installation.Name)

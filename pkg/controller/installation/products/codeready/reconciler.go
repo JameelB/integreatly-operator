@@ -164,6 +164,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 }
 
 func (r *Reconciler) reconcileExternalDatasources(ctx context.Context, serverClient k8sclient.Client) (integreatlyv1alpha1.StatusPhase, error) {
+	fmt.Println("JB-TEST: CODEREADY: RECONCILING EXTERNAL DATASTORE")
 	logrus.Infof("Reconciling external datastore")
 	ns := r.installation.Namespace
 

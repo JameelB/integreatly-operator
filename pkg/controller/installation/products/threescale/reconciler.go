@@ -148,6 +148,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, installation *integreatlyv1a
 	}
 
 	if r.installation.GetDeletionTimestamp() == nil {
+		fmt.Println("JB-TEST: 3SCALE: CREATING CRO RESOURCES")
+		fmt.Printf("JB-TEST: 3SCALE: DELETION TIMESTAMP %s", r.installation.GetDeletionTimestamp())
 		phase, err = r.reconcileSMTPCredentials(ctx, serverClient)
 		if err != nil || phase != integreatlyv1alpha1.PhaseCompleted {
 			resources.EmitEventProcessingError(r.recorder, installation, phase, "Failed to reconcile smtp credentials", err)
@@ -499,6 +501,7 @@ func (r *Reconciler) reconcileExternalDatasources(ctx context.Context, serverCli
 
 	// setup postgres cr for the cloud resource operator
 	// this will be used by the cloud resources operator to provision a postgres instance
+	fmt.Println("JB-TEST: 3SCALE: CREATING POSTGRES")
 	logrus.Info("Creating postgres instance")
 	postgresName := fmt.Sprintf("threescale-postgres-%s", r.installation.Name)
 	postgres, err := croUtil.ReconcilePostgres(ctx, serverClient, r.installation.Spec.Type, tier, postgresName, ns, postgresName, ns, func(cr metav1.Object) error {

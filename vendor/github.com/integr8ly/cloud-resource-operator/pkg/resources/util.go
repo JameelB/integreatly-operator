@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/integr8ly/cloud-resource-operator/pkg/apis/integreatly/v1alpha1"
 	"github.com/integr8ly/cloud-resource-operator/pkg/apis/integreatly/v1alpha1/types"
@@ -94,6 +95,8 @@ func ReconcilePostgres(ctx context.Context, client client.Client, deploymentType
 		},
 	}
 
+	fmt.Printf("JB-TEST: UTILS: RECONCILING POSTGRES %s\n", pg.Name)
+
 	// execute logic to modify the resource before creation
 	// e.g. add owner refs
 	if modifyFunc != nil {
@@ -103,6 +106,7 @@ func ReconcilePostgres(ctx context.Context, client client.Client, deploymentType
 		}
 	}
 
+	fmt.Printf("JB-TEST: UTILS: CREATING POSTGRES %s\n", pg.Name)
 	// Create or update the resource
 	_, err := controllerutil.CreateOrUpdate(ctx, client, pg, func() error {
 		pg.Spec.Type = deploymentType
