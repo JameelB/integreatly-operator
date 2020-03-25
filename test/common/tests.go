@@ -18,5 +18,6 @@ var (
 		{"Verify CRO BlobStorage CRs Successful", TestCROBlobStorageSuccessfulState},
 		{"Verify PodDisruptionBudgets exist", TestIntegreatlyPodDisruptionBudgetsExist},
 		{"Verify all products routes are created", TestIntegreatlyRoutesExist},
+		{"Verify Codeready CRUDL permissions", TestCodereadyCrudlPermisssions},
 	}
 )
