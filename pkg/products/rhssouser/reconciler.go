@@ -3,8 +3,9 @@ package rhssouser
 import (
 	"context"
 	"fmt"
-	"github.com/integr8ly/cloud-resource-operator/pkg/apis/integreatly/v1alpha1/types"
 	"strings"
+
+	"github.com/integr8ly/cloud-resource-operator/pkg/apis/integreatly/v1alpha1/types"
 
 	monitoringv1alpha1 "github.com/integr8ly/application-monitoring-operator/pkg/apis/applicationmonitoring/v1alpha1"
 	"github.com/integr8ly/integreatly-operator/pkg/products/monitoring"
@@ -898,6 +899,24 @@ func (r *Reconciler) cleanupKeycloakResources(ctx context.Context, inst *integre
 		}
 	}
 
+	// Ensure all users and clients are deleted before removing the realms
+	usersRemaining := &keycloak.KeycloakUserList{}
+	err = serverClient.List(ctx, usersRemaining, opts)
+	if err != nil {
+		return integreatlyv1alpha1.PhaseFailed, err
+	}
+
+	clientsRemaining := &keycloak.KeycloakClientList{}
+	err = serverClient.List(ctx, clientsRemaining, opts)
+	if err != nil {
+		return integreatlyv1alpha1.PhaseFailed, err
+	}
+
+	if len(usersRemaining.Items) > 0 || len(clientsRemaining.Items) > 0 {
+		logrus.Infof("There are %d keycloak clients and %d keycloak users remaining to be removed from %v", len(usersRemaining.Items), len(clientsRemaining.Items), r.Config.GetNamespace())
+		return integreatlyv1alpha1.PhaseInProgress, err
+	}
+
 	// Delete all realms
 	realms := &keycloak.KeycloakRealmList{}
 	err = serverClient.List(ctx, realms, opts)
@@ -912,7 +931,6 @@ func (r *Reconciler) cleanupKeycloakResources(ctx context.Context, inst *integre
 		realm.SetFinalizers([]string{})
 		err := serverClient.Update(ctx, &realm)
 		if !k8serr.IsNotFound(err) && err != nil {
-			logrus.Info("Error removing finalizer from Realm", err)
 			return integreatlyv1alpha1.PhaseFailed, err
 		}
 	}
